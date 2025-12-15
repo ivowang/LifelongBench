@@ -1,63 +1,116 @@
-# LifelongAgentBench: Evaluating LLM Agents as Lifelong Learners
+# LifelongAgentBench Complete Setup Guide
 
-<p align="center">
-    <img src="https://img.picui.cn/free/2025/05/21/682d857c0cb55.png" alt="Logo" width="80px">
+## Step 1: Clone Repository and Install Dependencies
 
-[//]: # (    <br>)
-[//]: # (    <b>WebArena is a standalone, self-hostable web environment for building autonomous agents</b>)
-</p>
+```bash
+cd LifelongAgentBench
 
-<p align="center">
-<a href="https://www.python.org/downloads/release/python-3119/"><img src="https://img.shields.io/badge/python-3.11-blue.svg" alt="Python 3.11"></a>
-<a href="https://pre-commit.com/"><img src="https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white" alt="pre-commit"></a>
-<a href="https://github.com/psf/black"><img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Code style: black"></a>
-<a href="https://mypy-lang.org/"><img src="https://img.shields.io/badge/mypy-strict-blue" alt="Checked with mypy"></a>
-</p>
-
-<p align="center">
-<a href="https://caixd-220529.github.io/LifelongAgentBench/">ProjectPage</a> •
-<a href="https://arxiv.org/abs/2505.11942">Paper</a> •
-<a href="https://huggingface.co/datasets/csyq/LifelongAgentBench">Dataset</a>
-</p>
-
-# Setup
-
-```shell
-git clone ...
-cd continual_agent_bench
 pip install -r requirements.txt
-pip install pre-commit==4.0.1  # ensure that pre-commit hooks are installed
-pre-commit install  # install pre-commit hooks
-pre-commit run --all-files  # check its effect
 
-docker pull mysql  # build images for db_bench
+pip install pre-commit==4.0.1
+pre-commit install
+pre-commit run --all-files
+```
 
-docker pull ubuntu  # build images for os_interaction
+## Step 2: Prepare Docker Images
+
+```bash
+docker pull mysql:8.0
+
+docker pull ubuntu
+
 docker build -f scripts/dockerfile/os_interaction/default scripts/dockerfile/os_interaction --tag local-os/default
 ```
 
-# Run experiments
-If you want to run experiments in single machine mode, please use the following command:
-```shell
+## Step 3: Generate Chat History Items
+
+```bash
+cd LifelongAgentBench
 export PYTHONPATH=./
+
+python src/factories/chat_history_item/offline/construct.py
+```
+
+This will create the following directory structure:
+- `chat_history_items/standard/` - Contains db_bench.json, os_interaction.json, knowledge_graph.json
+- `chat_history_items/previous_sample_utilization/` - Contains the same files
+
+## Step 4: Download Dataset
+
+```bash
+pip install hf-cli
+
+huggingface-cli download csyq/LifelongAgentBench \
+  --repo-type dataset \
+  --local-dir ./data \
+  --local-dir-use-symlinks False
+```
+
+## Step 5: Convert Dataset Format
+
+The downloaded dataset is in parquet format and needs to be converted to JSON format required by the project:
+
+```bash
+export PYTHONPATH=./
+
+python convert_parquet_to_json.py
+```
+
+This will generate:
+- `data/v0303/db_bench/processed/v0317_first500/entry_dict.json`
+
+## Step 6: Configure Model Paths
+
+**Important**: 
+- If using models that require authentication (e.g., Llama), you need to login to HuggingFace first:
+  ```bash
+  huggingface-cli login
+  # or
+  python -c "from huggingface_hub import login; login()"
+  ```
+- The first run will download the model (may take several hours depending on network speed)
+
+## Step 7: Start the Server
+
+Start the server in one terminal (**keep it running**):
+
+```bash
+export PYTHONPATH=./
+
+python ./src/distributed_deployment_utils/start_server.py \
+  --config_path ./configs/assignments/experiments/llama_31_8b_instruct/instance/db_bench/instance/standard.yaml
+```
+
+**Verify the server is running correctly**:
+```bash
+# Test Task Server (port 8000)
+curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8000/api/ping
+
+# Test Chat History Item Factory Server (port 8001)
+curl -X POST -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8001/api/ping
+```
+
+Both commands should return `{"response":"Hello, World!"}`
+
+## Step 8: Run Experiments
+
+Run experiments in **another terminal**:
+
+```bash
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
-python ./src/run_experiment.py --config_path "configs/assignments/experiments/llama_31_8b_instruct/instance/db_bench/instance/standard.yaml"
-```
-
-If you want to run experiments in distributed mode, you first need to start the `ServerSideController` in the machine that can deploy the docker containers.
-```shell
 export PYTHONPATH=./
 
-python src/distributed_deployment_utils/server_side_controller/main.py
+python ./src/run_experiment.py \
+  --config_path "configs/assignments/experiments/qwen25_7b_instruct/instance/db_bench/instance/standard.yaml"
 ```
-Then, you can run the following command in HPC node.
-```shell
-export PYTHONPATH=./
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-python src/distributed_deployment_utils/run_experiment_remotely.py --config_path "configs/assignments/experiments/llama_31_8b_instruct/instance/db_bench/instance/standard.yaml"
+Or use other model configurations:
+```bash
+# Using Qwen2.5-7B-Instruct
+python ./src/run_experiment.py \
+  --config_path "configs/assignments/experiments/qwen25_7b_instruct/instance/db_bench/instance/standard.yaml"
 ```
-The `ServerSideController` can be reused for multiple experiments.
-> [!NOTE]
-> Don't forget to update the IP address in `configs/components/environment.yaml` as well as in the files under `configs/components/clients`.
+
+## Step 9: View Results
+
+Experiment results will be saved in the `outputs/` directory, with each experiment creating a timestamped subdirectory.
